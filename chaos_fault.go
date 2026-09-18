@@ -14,6 +14,7 @@ import (
 
 var chaosFaults = map[string]error{
 	"close response": syscall.EIO,
+	"close server":   syscall.EIO,
 	"decode config":  syscall.EINVAL,
 	"http call":      syscall.ECONNREFUSED,
 	"new request":    syscall.EINVAL,
@@ -24,7 +25,6 @@ var chaosFaults = map[string]error{
 	"read request":   syscall.EIO,
 	"read response":  syscall.EIO,
 	"serve":          syscall.EADDRINUSE,
-	"shutdown":       syscall.EIO,
 	"stop signals":   syscall.EIO,
 	"write coverage": syscall.EIO,
 	"write response": syscall.EPIPE,

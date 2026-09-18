@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"errors"
 	"flag"
 	"log/slog"
@@ -9,49 +8,54 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
 )
 
 func main() {
-	defer flushCoverage()
-
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
 
 	slog.SetDefault(log)
+	code := run(os.Args, log)
 
-	if len(os.Args) < 2 {
+	flushCoverage()
+	os.Exit(code)
+}
+
+func run(args []string, log *slog.Logger) (code int) {
+	if len(args) < 2 {
 		printUsage()
-		os.Exit(1)
+
+		return 1
 	}
 
 	try(func() {
-		switch os.Args[1] {
+		switch args[1] {
 		case "run":
 			armChaos()
 
-			fs := flag.NewFlagSet("run", flag.ExitOnError)
+			fs := flag.NewFlagSet("run", flag.ContinueOnError)
 			config := fs.String("c", "", "config file")
 
 			throw(chaosCall("parse flags", func() error {
-				return fs.Parse(os.Args[2:])
+				return fs.Parse(args[2:])
 			}))
 
 			runNode(loadConfig(*config), log)
 		default:
 			printUsage()
-			os.Exit(1)
+			code = 1
 		}
 	}).catch(func(err *Exception) {
 		log.Error("error", "err", err)
-		os.Exit(1)
+		code = 1
 	})
+
+	return code
 }
 
 func runNode(cfg *Config, log *slog.Logger) {
 	node := newNode(cfg, log)
 	server := &http.Server{Addr: cfg.Listen, Handler: node.handler()}
 	signals := make(chan os.Signal, 1)
-	stopped := make(chan struct{})
 
 	throw(chaosCall("notify signals", func() error {
 		signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM)
@@ -68,21 +72,8 @@ func runNode(cfg *Config, log *slog.Logger) {
 	}()
 
 	go func() {
-		defer close(stopped)
-
-		try(func() {
-			<-signals
-
-			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-
-			defer cancel()
-
-			throw(chaosCall("shutdown", func() error {
-				return server.Shutdown(ctx)
-			}))
-		}).catch(func(err *Exception) {
-			log.Error("shutdown failed", "err", err)
-		})
+		<-signals
+		throw(chaosCall("close server", server.Close))
 	}()
 
 	log.Info("listening", "addr", cfg.Listen)
@@ -92,8 +83,6 @@ func runNode(cfg *Config, log *slog.Logger) {
 	})
 
 	if errors.Is(err, http.ErrServerClosed) {
-		<-stopped
-
 		return
 	}
 

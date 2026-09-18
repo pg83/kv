@@ -119,7 +119,7 @@ jobs:
           set -o pipefail
           python3 dev/merge_coverage.py \
             --output "$RUNNER_TEMP/coverage.out" \
-            --minimum 80 \
+            --minimum 100 \
             "$RUNNER_TEMP"/profiles/kv-coverage-go-*/coverage*.out | tee "$RUNNER_TEMP/summary.txt"
           {
             echo "## Coverage"

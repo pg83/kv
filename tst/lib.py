@@ -21,8 +21,9 @@ def free_port():
 
 
 class Lab:
-    def __init__(self):
+    def __init__(self, env=None):
         self.dir = Path(tempfile.mkdtemp(prefix="kv-lab-"))
+        self.env = env or {}
         self.ports = [free_port() for _ in range(3)]
         self.peers = [
             {"id": f"lab{i + 1}", "endpoint": f"http://127.0.0.1:{port}"}
@@ -43,22 +44,40 @@ class Lab:
             path.write_text(json.dumps(config))
             self.configs.append(path)
 
-    def start(self, index):
+    def environment(self, extra=None):
         env = os.environ.copy()
+        env.update(self.env)
+
+        if extra:
+            env.update(extra)
+
         coverage = env.get("GOCOVERDIR")
 
         if coverage:
-            directory = Path(coverage) / f"daemon-{self.serial}"
+            directory = Path(coverage) / f"daemon-{self.dir.name}-{self.serial}"
             directory.mkdir(parents=True)
             env["GOCOVERDIR"] = str(directory)
 
         self.serial += 1
+
+        return env
+
+    def command(self, *args, env=None):
+        return subprocess.run(
+            [KV, *args],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=self.environment(env),
+            timeout=10,
+        )
+
+    def start(self, index):
         log = open(self.dir / f"lab{index + 1}-{self.serial}.log", "wb")
         process = subprocess.Popen(
             [KV, "run", "-c", self.configs[index]],
             stdout=log,
             stderr=log,
-            env=env,
+            env=self.environment(),
         )
         self.processes[index] = process
         self.logs.append(log)

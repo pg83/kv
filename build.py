@@ -191,7 +191,7 @@ if COVERAGE:
         cmd=[
             "python3", "$(S)/dev/coverage.py",
             "--output", "$(B)/coverage-chaos.out",
-            "--minimum", "0",
+            "--minimum", "100",
             *chaos_coverage_dirs,
         ],
         cwd="$(S)",
@@ -208,6 +208,7 @@ if COVERAGE:
         cmd=[
             "python3", "$(S)/dev/coverage.py",
             "--output", "$(B)/coverage.out",
+            "--minimum", "99",
             *coverage_dirs,
         ],
         cwd="$(S)",

@@ -25,10 +25,6 @@ func (e *Exception) catch(cb func(*Exception)) {
 }
 
 func (e *Exception) asError() error {
-	if e == nil {
-		return nil
-	}
-
 	return e.what()
 }
 
@@ -56,18 +52,6 @@ func throw2[T any](val T, err error) T {
 	return val
 }
 
-func throw3[T1, T2 any](v1 T1, v2 T2, err error) (T1, T2) {
-	throw(err)
-
-	return v1, v2
-}
-
-func throw4[T1, T2, T3 any](v1 T1, v2 T2, v3 T3, err error) (T1, T2, T3) {
-	throw(err)
-
-	return v1, v2, v3
-}
-
 func throwFmt(format string, args ...any) {
 	exceptionf(format, args...).throw()
 }
@@ -75,11 +59,7 @@ func throwFmt(format string, args ...any) {
 func try(cb func()) (err *Exception) {
 	defer func() {
 		if rec := recover(); rec != nil {
-			if exc, ok := rec.(*Exception); ok {
-				err = exc
-			} else {
-				panic(rec)
-			}
+			err = rec.(*Exception)
 		}
 	}()
 

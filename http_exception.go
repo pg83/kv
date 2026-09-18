@@ -7,12 +7,8 @@ type HTTPException struct {
 	message string
 }
 
-func (e *HTTPException) error() string {
-	return e.message
-}
-
 func (e *HTTPException) Error() string {
-	return e.error()
+	return e.message
 }
 
 func newHTTPException(status int, message string) *HTTPException {
@@ -29,7 +25,7 @@ func (e *HTTPException) write(w http.ResponseWriter) {
 	writeHeader(w, e.status)
 
 	_, _ = chaosCall2("write response", func() (int, error) {
-		return w.Write([]byte(e.message + "\n"))
+		return w.Write([]byte(e.Error() + "\n"))
 	})
 }
 

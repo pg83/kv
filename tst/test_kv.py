@@ -2,7 +2,11 @@
 
 import concurrent.futures
 import hashlib
+import http.server
+import json
 import os
+import socket
+import threading
 
 from lib import Lab
 
@@ -33,7 +37,44 @@ def peer_index(peers, ident):
     return next(index for index, peer in enumerate(peers) if peer["id"] == ident)
 
 
-def main():
+class Unavailable(http.server.BaseHTTPRequestHandler):
+    def respond(self):
+        self.send_response(503)
+        self.end_headers()
+
+    do_GET = respond
+    do_PUT = respond
+
+    def log_message(self, *_args):
+        pass
+
+
+class BrokenResponse(http.server.BaseHTTPRequestHandler):
+    def respond(self):
+        self.send_response(200)
+        self.send_header("Content-Length", "10")
+        self.send_header("Connection", "close")
+        self.end_headers()
+        self.wfile.write(b"x")
+        self.close_connection = True
+
+    do_GET = respond
+    do_PUT = respond
+
+    def log_message(self, *_args):
+        pass
+
+
+def write_config(lab, index, peers):
+    lab.peers = peers
+    lab.configs[index].write_text(json.dumps({
+        "listen": f"127.0.0.1:{lab.ports[index]}",
+        "peers": peers,
+        "buckets": {"default": 1048576, "small": 8},
+    }))
+
+
+def normal_scenario():
     lab = Lab()
     chaotic = bool(os.environ.get("KV_CHAOS"))
 
@@ -100,7 +141,21 @@ def main():
         assert lab.put(store, "small", "a", b"12345678", internal=True)[0] == 413
         assert lab.get(store, "small", "a", internal=True) == (200, b"123456")
         assert lab.get(store, "missing", "a", internal=True)[0] == 404
+        assert lab.put(store, "missing", "a", b"value", internal=True)[0] == 404
         assert lab.request(store, "GET", "/small/get")[0] == 400
+        assert lab.request(store, "GET", "/small/get?key=a&key=b")[0] == 400
+
+        with socket.create_connection(("127.0.0.1", lab.ports[store])) as connection:
+            connection.sendall(
+                b"PUT /default/put?key=broken HTTP/1.1\r\n"
+                b"Host: localhost\r\n"
+                b"Transfer-Encoding: chunked\r\n"
+                b"Connection: close\r\n\r\n"
+                b"not-a-size\r\n"
+            )
+            connection.shutdown(socket.SHUT_WR)
+            response = connection.recv(4096)
+            assert b" 500 " in response
 
         def hammer(worker):
             for iteration in range(100):
@@ -116,6 +171,91 @@ def main():
             assert lab.chaos_seen()
     finally:
         lab.close()
+
+
+def unavailable_scenario():
+    lab = Lab(env={"KV_CHAOS": "", "KV_CHAOS_SEED": ""})
+    peers = [{"id": "down", "endpoint": f"http://127.0.0.1:{lab.ports[1]}"}]
+    write_config(lab, 0, peers)
+
+    try:
+        lab.start(0)
+        assert lab.get(0, "default", "key") == (503, b"Service Unavailable\n")
+    finally:
+        lab.close()
+
+
+def retry_scenario():
+    upstream = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Unavailable)
+    broken = http.server.ThreadingHTTPServer(("127.0.0.1", 0), BrokenResponse)
+    threads = [
+        threading.Thread(target=upstream.serve_forever),
+        threading.Thread(target=broken.serve_forever),
+    ]
+
+    for thread in threads:
+        thread.start()
+
+    lab = Lab(env={"KV_CHAOS": "", "KV_CHAOS_SEED": ""})
+    peers = [
+        {"id": "unavailable", "endpoint": f"http://127.0.0.1:{upstream.server_port}"},
+        {"id": "broken", "endpoint": f"http://127.0.0.1:{broken.server_port}"},
+        {"id": "local", "endpoint": f"http://127.0.0.1:{lab.ports[0]}"},
+    ]
+    write_config(lab, 0, peers)
+
+    try:
+        lab.start(0)
+        key = key_for(peers, "unavailable", "retry")
+        assert lab.put(0, "default", key, b"value") == (204, b"")
+        assert lab.get(0, "default", key, internal=True) == (200, b"value")
+
+        key = key_for(peers, "broken", "broken")
+        assert lab.put(0, "default", key, b"value") == (204, b"")
+        assert lab.get(0, "default", key, internal=True) == (200, b"value")
+    finally:
+        lab.close()
+
+        for server in (upstream, broken):
+            server.shutdown()
+            server.server_close()
+
+        for thread in threads:
+            thread.join()
+
+
+def handler_failure_scenario():
+    if not os.environ.get("KV_CHAOS"):
+        return
+
+    lab = Lab(env={"KV_CHAOS": "read request:1", "KV_CHAOS_SEED": "1"})
+
+    try:
+        lab.start(0)
+        assert lab.put(0, "default", "key", b"value", internal=True)[0] == 500
+    finally:
+        lab.close()
+
+
+def request_failure_scenario():
+    if not os.environ.get("KV_CHAOS"):
+        return
+
+    lab = Lab(env={"KV_CHAOS": "new request:1", "KV_CHAOS_SEED": "1"})
+
+    try:
+        lab.start(0)
+        assert lab.get(0, "default", "key")[0] == 503
+    finally:
+        lab.close()
+
+
+def main():
+    normal_scenario()
+    unavailable_scenario()
+    retry_scenario()
+    handler_failure_scenario()
+    request_failure_scenario()
 
 
 if __name__ == "__main__":

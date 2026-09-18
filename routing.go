@@ -28,13 +28,7 @@ func rankPeers(peers []PeerConfig, bucket string, key string) []PeerConfig {
 	}
 
 	sort.Slice(ranked, func(i int, j int) bool {
-		order := bytes.Compare(ranked[i].score[:], ranked[j].score[:])
-
-		if order == 0 {
-			return ranked[i].peer.ID < ranked[j].peer.ID
-		}
-
-		return order > 0
+		return bytes.Compare(ranked[i].score[:], ranked[j].score[:]) > 0
 	})
 
 	result := make([]PeerConfig, len(ranked))
