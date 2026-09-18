@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -38,31 +39,32 @@ func (n *Node) guard(cb http.HandlerFunc) http.HandlerFunc {
 		try(func() {
 			cb(w, request)
 		}).catch(func(err *Exception) {
+			var httpErr *HTTPException
+
+			if errors.As(err.asError(), &httpErr) {
+				httpErr.write(w)
+
+				return
+			}
+
 			n.log.Error("request failed", "err", err)
-			http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+			newHTTPException(http.StatusInternalServerError, "").write(w)
 		})
 	}
 }
 
-func requestKey(w http.ResponseWriter, request *http.Request) (string, bool) {
+func requestKey(request *http.Request) string {
 	values, found := request.URL.Query()["key"]
 
 	if !found || len(values) != 1 {
-		http.Error(w, "one key parameter is required", http.StatusBadRequest)
-
-		return "", false
+		throwHTTP(http.StatusBadRequest, "one key parameter is required")
 	}
 
-	return values[0], true
+	return values[0]
 }
 
 func (n *Node) externalGet(w http.ResponseWriter, request *http.Request) {
-	key, ok := requestKey(w, request)
-
-	if !ok {
-		return
-	}
-
+	key := requestKey(request)
 	bucket := request.PathValue("bucket")
 	status, body := forward(n.client, request.Context(), n.peers, http.MethodGet, bucket, "get", key, nil)
 
@@ -70,12 +72,7 @@ func (n *Node) externalGet(w http.ResponseWriter, request *http.Request) {
 }
 
 func (n *Node) externalPut(w http.ResponseWriter, request *http.Request) {
-	key, ok := requestKey(w, request)
-
-	if !ok {
-		return
-	}
-
+	key := requestKey(request)
 	value := throw2(io.ReadAll(request.Body))
 	bucket := request.PathValue("bucket")
 	status, body := forward(n.client, request.Context(), n.peers, http.MethodPut, bucket, "put", key, value)
@@ -84,58 +81,44 @@ func (n *Node) externalPut(w http.ResponseWriter, request *http.Request) {
 }
 
 func (n *Node) internalGet(w http.ResponseWriter, request *http.Request) {
-	key, ok := requestKey(w, request)
-
-	if !ok {
-		return
-	}
-
+	key := requestKey(request)
 	bucket := n.store.bucket(request.PathValue("bucket"))
 
 	if bucket == nil {
-		http.NotFound(w, request)
-
-		return
+		throwHTTP(http.StatusNotFound, "")
 	}
 
 	value, found := bucket.get(key)
 
 	if !found {
-		http.NotFound(w, request)
-
-		return
+		throwHTTP(http.StatusNotFound, "")
 	}
 
 	writeResult(w, http.StatusOK, value)
 }
 
 func (n *Node) internalPut(w http.ResponseWriter, request *http.Request) {
-	key, ok := requestKey(w, request)
-
-	if !ok {
-		return
-	}
-
+	key := requestKey(request)
 	bucket := n.store.bucket(request.PathValue("bucket"))
 
 	if bucket == nil {
-		http.NotFound(w, request)
-
-		return
+		throwHTTP(http.StatusNotFound, "")
 	}
 
 	value := throw2(io.ReadAll(request.Body))
 
 	if !bucket.put(key, value) {
-		http.Error(w, http.StatusText(http.StatusRequestEntityTooLarge), http.StatusRequestEntityTooLarge)
-
-		return
+		throwHTTP(http.StatusRequestEntityTooLarge, "")
 	}
 
 	w.WriteHeader(http.StatusNoContent)
 }
 
 func writeResult(w http.ResponseWriter, status int, body []byte) {
+	if status >= http.StatusBadRequest {
+		throwHTTP(status, "")
+	}
+
 	if status == http.StatusOK {
 		w.Header().Set("Content-Type", "application/octet-stream")
 	}
