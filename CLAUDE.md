@@ -13,6 +13,8 @@ In-memory sharded key/value cache with three static peers and a per-bucket LRU.
 
 - `./build` builds `.build/bin/kv` and publishes `./kv`.
 - `./build test` runs the end-to-end suite in `tst/`.
+- `./build chaos` runs the same suite against `kv-chaos` with injected failures.
 - `./build -Drace test` runs the same suite under the Go race detector.
 - `./build -Dcoverage coverage` writes `.build/coverage.out`.
+- `./build -Dcoverage chaos coverage-chaos` writes `.build/coverage-chaos.out`.
 - `./lint.sh` runs the style gate, formats the Go sources, and builds `kv`.

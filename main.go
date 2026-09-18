@@ -27,10 +27,15 @@ func main() {
 	try(func() {
 		switch os.Args[1] {
 		case "run":
+			armChaos()
+
 			fs := flag.NewFlagSet("run", flag.ExitOnError)
 			config := fs.String("c", "", "config file")
 
-			throw(fs.Parse(os.Args[2:]))
+			throw(chaosCall("parse flags", func() error {
+				return fs.Parse(os.Args[2:])
+			}))
+
 			runNode(loadConfig(*config), log)
 		default:
 			printUsage()
@@ -48,9 +53,19 @@ func runNode(cfg *Config, log *slog.Logger) {
 	signals := make(chan os.Signal, 1)
 	stopped := make(chan struct{})
 
-	signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM)
+	throw(chaosCall("notify signals", func() error {
+		signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM)
 
-	defer signal.Stop(signals)
+		return nil
+	}))
+
+	defer func() {
+		_ = chaosCall("stop signals", func() error {
+			signal.Stop(signals)
+
+			return nil
+		})
+	}()
 
 	go func() {
 		defer close(stopped)
@@ -62,7 +77,9 @@ func runNode(cfg *Config, log *slog.Logger) {
 
 			defer cancel()
 
-			throw(server.Shutdown(ctx))
+			throw(chaosCall("shutdown", func() error {
+				return server.Shutdown(ctx)
+			}))
 		}).catch(func(err *Exception) {
 			log.Error("shutdown failed", "err", err)
 		})
@@ -70,7 +87,9 @@ func runNode(cfg *Config, log *slog.Logger) {
 
 	log.Info("listening", "addr", cfg.Listen)
 
-	err := server.ListenAndServe()
+	err := chaosCall("serve", func() error {
+		return server.ListenAndServe()
+	})
 
 	if errors.Is(err, http.ErrServerClosed) {
 		<-stopped
@@ -82,5 +101,7 @@ func runNode(cfg *Config, log *slog.Logger) {
 }
 
 func printUsage() {
-	os.Stderr.WriteString("Usage: kv run -c config.json\n")
+	throw2(chaosCall2("write stderr", func() (int, error) {
+		return os.Stderr.WriteString("Usage: kv run -c config.json\n")
+	}))
 }

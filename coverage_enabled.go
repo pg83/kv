@@ -8,5 +8,7 @@ import (
 )
 
 func flushCoverage() {
-	throw(coverage.WriteCountersDir(os.Getenv("GOCOVERDIR")))
+	throw(chaosCall("write coverage", func() error {
+		return coverage.WriteCountersDir(os.Getenv("GOCOVERDIR"))
+	}))
 }

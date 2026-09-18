@@ -9,9 +9,11 @@ on:
 
 permissions:
   contents: read
+  id-token: write
 
 jobs:
   test:
+    name: Build and test
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -26,14 +28,17 @@ jobs:
         run: test -z "$(gofmt -l *.go)" || { gofmt -d *.go; exit 1; }
 
       - name: Vet
-        run: go vet ./...
+        run: |
+          go vet ./...
+          go vet -tags=kvchaos ./...
         env:
           GOFLAGS: -mod=readonly
 
       - name: Build and test
-        run: ./build test kv
+        run: ./build test kv chaos-binary
 
   race:
+    name: Race detector
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -46,3 +51,99 @@ jobs:
 
       - name: Race detector
         run: ./build -Drace test
+
+  chaos:
+    name: Chaos
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Run the chaos binary
+        run: ./build -Dcoverage chaos coverage-chaos
+
+      - name: Save the chaos profile
+        if: ${{ !cancelled() && hashFiles('.build/coverage-chaos.out') != '' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: kv-coverage-go-chaos
+          path: .build/coverage-chaos.out
+          if-no-files-found: error
+          retention-days: 7
+
+  coverage:
+    name: Coverage
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Run the instrumented binary
+        run: ./build -Dcoverage coverage
+
+      - name: Save the plain profile
+        if: ${{ !cancelled() && hashFiles('.build/coverage.out') != '' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: kv-coverage-go-plain
+          path: .build/coverage.out
+          if-no-files-found: error
+          retention-days: 7
+
+  aggregate:
+    name: Coverage aggregate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    needs: [coverage, chaos]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: Collect every profile
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          pattern: kv-coverage-go-*
+          path: ${{ runner.temp }}/profiles
+
+      - name: Merge coverage
+        run: |
+          set -o pipefail
+          python3 dev/merge_coverage.py \
+            --output "$RUNNER_TEMP/coverage.out" \
+            --minimum 80 \
+            "$RUNNER_TEMP"/profiles/kv-coverage-go-*/coverage*.out | tee "$RUNNER_TEMP/summary.txt"
+          {
+            echo "## Coverage"
+            echo
+            echo '```text'
+            cat "$RUNNER_TEMP/summary.txt"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f
+        with:
+          use_oidc: true
+          files: ${{ runner.temp }}/coverage.out
+          flags: go
+          disable_search: true
+          fail_ci_if_error: true
+          verbose: true
+
+      - name: Save the merged profile
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: kv-coverage-go
+          path: ${{ runner.temp }}/coverage.out
+          if-no-files-found: error
+          retention-days: 7

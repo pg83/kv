@@ -1,5 +1,5 @@
 import build
-import os
+import zlib
 
 build.flags.allow({
     "coverage": {
@@ -63,8 +63,36 @@ kv = command(
     color="cyan",
 )
 
-tests = []
+chaos_binary = command(
+    name="chaos-binary",
+    inputs=GO_INPUTS,
+    outputs=["$(B)/bin/kv-chaos"],
+    cmd=[
+        "go", "build",
+        "-trimpath",
+        "-buildvcs=false",
+        "-tags=" + ("kvchaos,kvcoverage" if COVERAGE else "kvchaos"),
+        *(["-cover", "-covermode=atomic"] if COVERAGE else []),
+        "-o", "$(B)/bin/kv-chaos",
+        ".",
+    ],
+    cwd="$(S)",
+    env=GO_ENV,
+    descr="GO",
+    color="cyan",
+)
+
+CHAOS_POINTS = ",".join([
+    "close response:11",
+    "http call:5",
+    "new request:13",
+    "read response:7",
+])
+
+plain_tests = []
+chaos_tests = []
 coverage_dirs = []
+chaos_coverage_dirs = []
 
 for test_path in build.glob("$(S)/tst/test_*.py"):
     test_name = test_path.rsplit("/", 1)[-1][len("test_"):-len(".py")]
@@ -86,9 +114,10 @@ for test_path in build.glob("$(S)/tst/test_*.py"):
         coverage_dirs.append(coverage_dir)
         outputs.append(coverage_dir)
 
-    tests.append(command(
+    inputs = [test_path, "$(S)/tst/lib.py"]
+    plain_tests.append(command(
         name=f"e2e_{test_name}",
-        inputs=[test_path, "$(S)/tst/lib.py"],
+        inputs=inputs,
         outputs=outputs,
         deps=[kv],
         cmd=[
@@ -102,16 +131,80 @@ for test_path in build.glob("$(S)/tst/test_*.py"):
         color="green",
     ))
 
+    chaos_stamp = f"$(B)/chaos/{test_name}.stamp"
+    chaos_env = {
+        "KV_CHAOS": CHAOS_POINTS,
+        "KV_CHAOS_SEED": str(zlib.crc32(test_name.encode()) % 100000),
+        "KV_TEST_BINARY": chaos_binary.outputs[0],
+        "PYTHONDONTWRITEBYTECODE": "1",
+    }
+    chaos_prelude = []
+    chaos_outputs = [chaos_stamp]
+
+    if COVERAGE:
+        chaos_coverage_dir = f"$(B)/coverage-chaos/{test_name}"
+        chaos_env["GOCOVERDIR"] = chaos_coverage_dir
+        chaos_prelude = [mkdir(chaos_coverage_dir)]
+        chaos_coverage_dirs.append(chaos_coverage_dir)
+        chaos_outputs.append(chaos_coverage_dir)
+
+    chaos_tests.append(command(
+        name=f"chaos_{test_name}",
+        inputs=inputs,
+        outputs=chaos_outputs,
+        deps=[chaos_binary],
+        cmd=[
+            *chaos_prelude,
+            ["python3", test_path],
+            touch(chaos_stamp),
+        ],
+        cwd="$(S)",
+        env=chaos_env,
+        descr="KO",
+        color="red",
+    ))
+
+chaos_points = command(
+    name="chaos-points",
+    inputs=[*GO_SOURCES, "$(S)/dev/chaos_points.py"],
+    outputs=["$(B)/chaos-points.stamp"],
+    cmd=[
+        ["python3", "$(S)/dev/chaos_points.py"],
+        touch("$(B)/chaos-points.stamp"),
+    ],
+    cwd="$(S)",
+    descr="KO",
+    color="red",
+)
+
 group("install", kv)
-group("e2e", *tests)
-group("test", *tests)
+group("e2e", *plain_tests)
+group("test", *plain_tests)
+group("chaos", chaos_points, *chaos_tests)
 
 if COVERAGE:
+    chaos_coverage = command(
+        name="coverage-chaos",
+        inputs=["$(S)/dev/coverage.py"],
+        outputs=["$(B)/coverage-chaos.out"],
+        deps=chaos_tests,
+        cmd=[
+            "python3", "$(S)/dev/coverage.py",
+            "--output", "$(B)/coverage-chaos.out",
+            "--minimum", "0",
+            *chaos_coverage_dirs,
+        ],
+        cwd="$(S)",
+        env=GO_ENV,
+        descr="CV",
+        color="magenta",
+    )
+
     coverage = command(
         name="coverage",
         inputs=["$(S)/dev/coverage.py"],
         outputs=["$(B)/coverage.out"],
-        deps=tests,
+        deps=plain_tests,
         cmd=[
             "python3", "$(S)/dev/coverage.py",
             "--output", "$(B)/coverage.out",

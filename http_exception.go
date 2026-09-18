@@ -24,7 +24,13 @@ func newHTTPException(status int, message string) *HTTPException {
 }
 
 func (e *HTTPException) write(w http.ResponseWriter) {
-	http.Error(w, e.message, e.status)
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	writeHeader(w, e.status)
+
+	_, _ = chaosCall2("write response", func() (int, error) {
+		return w.Write([]byte(e.message + "\n"))
+	})
 }
 
 func throwHTTP(status int, message string) {

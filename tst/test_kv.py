@@ -2,6 +2,7 @@
 
 import concurrent.futures
 import hashlib
+import os
 
 from lib import Lab
 
@@ -34,6 +35,7 @@ def peer_index(peers, ident):
 
 def main():
     lab = Lab()
+    chaotic = bool(os.environ.get("KV_CHAOS"))
 
     try:
         lab.start_all()
@@ -42,26 +44,48 @@ def main():
             key = key_for(lab.peers, peer["id"], "shard")
             value = peer["id"].encode()
             assert lab.put(0, "default", key, value) == (204, b"")
+            holders = []
 
             for candidate in lab.peers:
                 index = peer_index(lab.peers, candidate["id"])
                 status, body = lab.get(index, "default", key, internal=True)
 
-                if candidate["id"] == peer["id"]:
+                if status == 200:
                     assert (status, body) == (200, value)
+                    holders.append(candidate["id"])
                 else:
                     assert status == 404
+
+            if chaotic:
+                assert holders
+                status, body = lab.get(0, "default", key)
+                assert status in (200, 404, 503)
+
+                if status == 200:
+                    assert body == value
+            else:
+                assert holders == [peer["id"]]
 
         fallback_key = key_for(lab.peers, "lab1", "fallback")
         fallback_order = rank(lab.peers, "default", fallback_key)
         fallback_index = peer_index(lab.peers, fallback_order[1]["id"])
         lab.stop(0)
         assert lab.put(1, "default", fallback_key, b"fallback") == (204, b"")
-        assert lab.get(fallback_index, "default", fallback_key, internal=True) == (200, b"fallback")
-        assert lab.get(1, "default", fallback_key) == (200, b"fallback")
+        fallback_holders = [
+            index for index in (1, 2)
+            if lab.get(index, "default", fallback_key, internal=True) == (200, b"fallback")
+        ]
+        assert fallback_holders
+
+        if not chaotic:
+            assert fallback_holders == [fallback_index]
+            assert lab.get(1, "default", fallback_key) == (200, b"fallback")
+
         lab.start(0)
-        assert lab.get(1, "default", fallback_key)[0] == 404
-        assert lab.get(fallback_index, "default", fallback_key, internal=True) == (200, b"fallback")
+
+        if not chaotic:
+            assert lab.get(1, "default", fallback_key)[0] == 404
+            assert lab.get(fallback_index, "default", fallback_key, internal=True) == (200, b"fallback")
 
         store = 1
         assert lab.put(store, "small", "a", b"111", internal=True) == (204, b"")
@@ -87,6 +111,9 @@ def main():
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
             list(executor.map(hammer, range(8)))
+
+        if chaotic:
+            assert lab.chaos_seen()
     finally:
         lab.close()
 

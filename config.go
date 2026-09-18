@@ -19,10 +19,16 @@ type Config struct {
 }
 
 func loadConfig(path string) *Config {
-	data := throw2(os.ReadFile(path))
+	data := throw2(chaosCall2("read config", func() ([]byte, error) {
+		return os.ReadFile(path)
+	}))
+
 	cfg := &Config{}
 
-	throw(json.Unmarshal(data, cfg))
+	throw(chaosCall("decode config", func() error {
+		return json.Unmarshal(data, cfg)
+	}))
+
 	cfg.validate()
 
 	return cfg
@@ -51,7 +57,9 @@ func (c *Config) validate() {
 			throwFmt("duplicate peer id %q", peer.ID)
 		}
 
-		parsed := throw2(url.Parse(peer.Endpoint))
+		parsed := throw2(chaosCall2("parse endpoint", func() (*url.URL, error) {
+			return url.Parse(peer.Endpoint)
+		}))
 
 		if (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
 			throwFmt("bad endpoint %q", peer.Endpoint)

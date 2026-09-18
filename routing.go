@@ -72,23 +72,33 @@ func internalURL(peer PeerConfig, bucket string, action string, key string) stri
 
 func forward(client *http.Client, ctx context.Context, peers []PeerConfig, method string, bucket string, action string, key string, value []byte) (int, []byte) {
 	for _, peer := range rankPeers(peers, bucket, key) {
-		request := throw2(http.NewRequestWithContext(ctx, method, internalURL(peer, bucket, action, key), bytes.NewReader(value)))
-
-		if method == http.MethodPut {
-			request.Header.Set("Content-Type", "application/octet-stream")
-		}
-
-		response, err := client.Do(request)
+		request, err := chaosCall2("new request", func() (*http.Request, error) {
+			return http.NewRequestWithContext(ctx, method, internalURL(peer, bucket, action, key), bytes.NewReader(value))
+		})
 
 		if err != nil {
 			continue
 		}
 
-		body, err := io.ReadAll(response.Body)
+		if method == http.MethodPut {
+			request.Header.Set("Content-Type", "application/octet-stream")
+		}
 
-		response.Body.Close()
+		response, err := chaosCall2("http call", func() (*http.Response, error) {
+			return client.Do(request)
+		})
 
 		if err != nil {
+			continue
+		}
+
+		body, readErr := chaosCall2("read response", func() ([]byte, error) {
+			return io.ReadAll(response.Body)
+		})
+
+		closeErr := chaosCall("close response", response.Body.Close)
+
+		if readErr != nil || closeErr != nil {
 			continue
 		}
 

@@ -106,6 +106,15 @@ class Lab:
         for log in self.logs:
             log.close()
 
+    def chaos_seen(self):
+        for log in self.logs:
+            log.flush()
+
+            if b"level=WARN msg=chaos " in Path(log.name).read_bytes():
+                return True
+
+        return False
+
     def request(self, index, method, path, body=None):
         connection = http.client.HTTPConnection("127.0.0.1", self.ports[index], timeout=5)
         connection.request(method, path, body=body)

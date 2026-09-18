@@ -73,7 +73,7 @@ func (n *Node) externalGet(w http.ResponseWriter, request *http.Request) {
 
 func (n *Node) externalPut(w http.ResponseWriter, request *http.Request) {
 	key := requestKey(request)
-	value := throw2(io.ReadAll(request.Body))
+	value := readRequest(request)
 	bucket := request.PathValue("bucket")
 	status, body := forward(n.client, request.Context(), n.peers, http.MethodPut, bucket, "put", key, value)
 
@@ -105,13 +105,13 @@ func (n *Node) internalPut(w http.ResponseWriter, request *http.Request) {
 		throwHTTP(http.StatusNotFound, "")
 	}
 
-	value := throw2(io.ReadAll(request.Body))
+	value := readRequest(request)
 
 	if !bucket.put(key, value) {
 		throwHTTP(http.StatusRequestEntityTooLarge, "")
 	}
 
-	w.WriteHeader(http.StatusNoContent)
+	writeHeader(w, http.StatusNoContent)
 }
 
 func writeResult(w http.ResponseWriter, status int, body []byte) {
@@ -123,9 +123,25 @@ func writeResult(w http.ResponseWriter, status int, body []byte) {
 		w.Header().Set("Content-Type", "application/octet-stream")
 	}
 
-	w.WriteHeader(status)
+	writeHeader(w, status)
 
 	if len(body) != 0 {
-		_, _ = w.Write(body)
+		_, _ = chaosCall2("write response", func() (int, error) {
+			return w.Write(body)
+		})
 	}
+}
+
+func readRequest(request *http.Request) []byte {
+	return throw2(chaosCall2("read request", func() ([]byte, error) {
+		return io.ReadAll(request.Body)
+	}))
+}
+
+func writeHeader(w http.ResponseWriter, status int) {
+	throw(chaosCall("write header", func() error {
+		w.WriteHeader(status)
+
+		return nil
+	}))
 }

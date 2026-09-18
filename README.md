@@ -1,5 +1,9 @@
 # kv
 
+[![CI](https://github.com/pg83/kv/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/pg83/kv/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/pg83/kv/branch/main/graph/badge.svg)](https://app.codecov.io/gh/pg83/kv/tree/main)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 Small in-memory sharded key/value cache.
 
 Every node has the same peer and bucket configuration. Public requests use
@@ -49,7 +53,13 @@ a missing value returns `404`, and a value larger than its bucket returns
 ```sh
 ./build
 ./build test
+./build chaos
 ./build -Drace test
 ./build -Dcoverage coverage
+./build -Dcoverage chaos coverage-chaos
 ./lint.sh
 ```
+
+`kv-chaos` reads failure rates from `KV_CHAOS`; for example,
+`KV_CHAOS="http call:5,read response:7"`. `KV_CHAOS_SEED` makes the sequence
+repeatable.
