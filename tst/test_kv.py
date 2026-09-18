@@ -67,10 +67,9 @@ class BrokenResponse(http.server.BaseHTTPRequestHandler):
 
 def write_config(lab, index, peers):
     lab.peers = peers
-    lab.configs[index].write_text(json.dumps({
-        "listen": f"127.0.0.1:{lab.ports[index]}",
+    lab.front_configs[index].write_text(json.dumps({
+        "listen": f"127.0.0.1:{lab.front_ports[index]}",
         "peers": peers,
-        "buckets": {"default": 1048576, "small": 8},
     }))
 
 
@@ -233,6 +232,7 @@ def handler_failure_scenario():
     try:
         lab.start(0)
         assert lab.put(0, "default", "key", b"value", internal=True)[0] == 500
+        assert lab.put(0, "default", "key", b"value")[0] == 500
     finally:
         lab.close()
 

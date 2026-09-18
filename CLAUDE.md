@@ -1,13 +1,15 @@
 # kv
 
-In-memory sharded key/value cache with three static peers and a per-bucket LRU.
+In-memory sharded key/value cache with separate storage backends and stateless fronts.
 
 ## Conventions
 
 - Style: `STYLE.md`.
 - One `package main`; all Go files live in the repository root.
 - Configuration is JSON only.
-- External handlers route; internal handlers only access local memory.
+- `kv front` routes client requests using its static backend list and has no store.
+- `kv back` only accesses local memory and has no peer list.
+- Each command has a separate JSON configuration and exports `/metrics`.
 
 ## Build and test
 

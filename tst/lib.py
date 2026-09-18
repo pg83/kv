@@ -25,24 +25,32 @@ class Lab:
         self.dir = Path(tempfile.mkdtemp(prefix="kv-lab-"))
         self.env = env or {}
         self.ports = [free_port() for _ in range(3)]
+        self.front_ports = [free_port() for _ in range(3)]
         self.peers = [
             {"id": f"lab{i + 1}", "endpoint": f"http://127.0.0.1:{port}"}
             for i, port in enumerate(self.ports)
         ]
-        self.configs = []
-        self.processes = [None, None, None]
+        self.back_configs = []
+        self.front_configs = []
+        self.back_processes = [None, None, None]
+        self.front_processes = [None, None, None]
         self.logs = []
         self.serial = 0
 
         for i, port in enumerate(self.ports):
             config = {
                 "listen": f"127.0.0.1:{port}",
-                "peers": self.peers,
                 "buckets": {"default": 1048576, "small": 8},
             }
-            path = self.dir / f"lab{i + 1}.json"
+            path = self.dir / f"back{i + 1}.json"
             path.write_text(json.dumps(config))
-            self.configs.append(path)
+            self.back_configs.append(path)
+            path = self.dir / f"front{i + 1}.json"
+            path.write_text(json.dumps({
+                "listen": f"127.0.0.1:{self.front_ports[i]}",
+                "peers": self.peers,
+            }))
+            self.front_configs.append(path)
 
     def environment(self, extra=None):
         env = os.environ.copy()
@@ -72,14 +80,24 @@ class Lab:
         )
 
     def start(self, index):
-        log = open(self.dir / f"lab{index + 1}-{self.serial}.log", "wb")
+        self.start_back(index)
+        self.start_front(index)
+
+    def start_back(self, index):
+        self.start_role(index, "back", self.back_configs, self.back_processes)
+
+    def start_front(self, index):
+        self.start_role(index, "front", self.front_configs, self.front_processes)
+
+    def start_role(self, index, role, configs, processes):
+        log = open(self.dir / f"{role}{index + 1}-{self.serial}.log", "wb")
         process = subprocess.Popen(
-            [KV, "run", "-c", self.configs[index]],
+            [KV, role, "-c", configs[index]],
             stdout=log,
             stderr=log,
             env=self.environment(),
         )
-        self.processes[index] = process
+        processes[index] = process
         self.logs.append(log)
         deadline = time.monotonic() + 5
 
@@ -89,7 +107,8 @@ class Lab:
                 raise AssertionError(f"lab{index + 1} exited: {Path(log.name).read_text()}")
 
             try:
-                self.request(index, "GET", "/default/get?key=ready")
+                path = "/metrics" if role == "front" else "/default/get?key=ready"
+                self.request(index, "GET", path, front=role == "front")
 
                 return
             except OSError:
@@ -102,7 +121,17 @@ class Lab:
             self.start(index)
 
     def stop(self, index):
-        process = self.processes[index]
+        self.stop_front(index)
+        self.stop_back(index)
+
+    def stop_back(self, index):
+        self.stop_role(index, self.back_processes)
+
+    def stop_front(self, index):
+        self.stop_role(index, self.front_processes)
+
+    def stop_role(self, index, processes):
+        process = processes[index]
 
         if process is None:
             return
@@ -116,7 +145,7 @@ class Lab:
                 process.kill()
                 process.wait(timeout=5)
 
-        self.processes[index] = None
+        processes[index] = None
 
     def close(self):
         for index in range(3):
@@ -134,8 +163,9 @@ class Lab:
 
         return False
 
-    def request(self, index, method, path, body=None, *, port=None):
-        connection = http.client.HTTPConnection("127.0.0.1", self.ports[index] if port is None else port, timeout=5)
+    def request(self, index, method, path, body=None, *, port=None, front=False):
+        ports = self.front_ports if front else self.ports
+        connection = http.client.HTTPConnection("127.0.0.1", ports[index] if port is None else port, timeout=5)
         connection.request(method, path, body=body)
         response = connection.getresponse()
         data = response.read()
@@ -146,7 +176,7 @@ class Lab:
     def operation(self, index, internal, method, bucket, action, key, value=None):
         prefix = "" if internal else "/v1"
         path = f"{prefix}/{urllib.parse.quote(bucket, safe='')}/{action}?{urllib.parse.urlencode({'key': key})}"
-        return self.request(index, method, path, value)
+        return self.request(index, method, path, value, front=not internal)
 
     def get(self, index, bucket, key, internal=False):
         return self.operation(index, internal, "GET", bucket, "get", key)

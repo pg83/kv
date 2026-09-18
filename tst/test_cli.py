@@ -7,20 +7,24 @@ import socket
 from lib import Lab, free_port
 
 
-def config(**changes):
+def config(role="front", **changes):
     value = {
         "listen": "127.0.0.1:1",
         "peers": [
             {"id": "one", "endpoint": "http://127.0.0.1:1"},
             {"id": "two", "endpoint": "http://127.0.0.1:2"},
         ],
-        "buckets": {"default": 1024},
     }
+
+    if role == "back":
+        del value["peers"]
+        value["buckets"] = {"default": 1024}
+
     value.update(changes)
     return value
 
 
-def run_config(lab, name, value, env=None):
+def run_config(lab, name, value, env=None, role="front"):
     path = lab.dir / f"{name}.json"
 
     if isinstance(value, str):
@@ -28,7 +32,7 @@ def run_config(lab, name, value, env=None):
     else:
         path.write_text(json.dumps(value))
 
-    return lab.command("run", "-c", path, env=env)
+    return lab.command(role, "-c", path, env=env)
 
 
 def fails(result):
@@ -42,9 +46,12 @@ def main():
     try:
         fails(lab.command())
         fails(lab.command("unknown"))
-        fails(lab.command("run", "-unknown", env=quiet))
-        fails(lab.command("run", "-c", lab.dir / "absent.json", env=quiet))
+        fails(lab.command("run"))
+        fails(lab.command("front", "-unknown", env=quiet))
+        fails(lab.command("back", "-c", lab.dir / "absent.json", env=quiet))
         fails(run_config(lab, "json", "{", quiet))
+        fails(run_config(lab, "extra-json", json.dumps(config()) + " {}", quiet))
+        fails(run_config(lab, "trailing", json.dumps(config()) + " invalid", quiet))
 
         invalid = {
             "listen": config(listen=""),
@@ -68,13 +75,23 @@ def main():
                 {"id": "one", "endpoint": "http://127.0.0.1:1/"},
                 {"id": "two", "endpoint": "http://127.0.0.1:1"},
             ]),
-            "buckets": config(buckets={}),
-            "bucket-name": config(buckets={"bad/name": 1}),
-            "bucket-size": config(buckets={"default": 0}),
+            "front-buckets": config(buckets={"default": 1024}),
+            "unknown-field": config(unknown=1),
         }
 
         for name, value in invalid.items():
             fails(run_config(lab, name, value, quiet))
+
+        invalid_back = {
+            "listen": config("back", listen=[]),
+            "buckets": config("back", buckets={}),
+            "bucket-name": config("back", buckets={"bad/name": 1}),
+            "bucket-size": config("back", buckets={"default": 0}),
+            "back-peers": config("back", peers=[]),
+        }
+
+        for name, value in invalid_back.items():
+            fails(run_config(lab, "back-" + name, value, quiet, role="back"))
 
         listener = socket.socket()
         listener.bind(("127.0.0.1", 0))
@@ -115,7 +132,7 @@ def main():
 
             for index, env in enumerate(cases):
                 if index < 6:
-                    result = lab.command("run", "-c", missing, env=env)
+                    result = lab.command("front", "-c", missing, env=env)
                 else:
                     result = run_config(lab, f"chaos-{index}", config(), env)
 

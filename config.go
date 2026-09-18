@@ -1,7 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
+	"io"
 	"net/url"
 	"os"
 	"strings"
@@ -12,10 +15,14 @@ type PeerConfig struct {
 	Endpoint string `json:"endpoint"`
 }
 
-type Config struct {
+type BackConfig struct {
 	Listen  ListenAddresses  `json:"listen"`
-	Peers   []PeerConfig     `json:"peers"`
 	Buckets map[string]int64 `json:"buckets"`
+}
+
+type FrontConfig struct {
+	Listen ListenAddresses `json:"listen"`
+	Peers  []PeerConfig    `json:"peers"`
 }
 
 type ListenAddresses []string
@@ -38,30 +45,34 @@ func (a *ListenAddresses) unmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, (*[]string)(a))
 }
 
-func loadConfig(path string) *Config {
+func loadConfig(path string, cfg any) {
 	data := throw2(chaosCall2("read config", func() ([]byte, error) {
 		return os.ReadFile(path)
 	}))
 
-	cfg := &Config{}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+
+	decoder.DisallowUnknownFields()
 
 	throw(chaosCall("decode config", func() error {
-		return json.Unmarshal(data, cfg)
+		return decoder.Decode(cfg)
 	}))
 
-	cfg.validate()
+	var extra any
 
-	return cfg
+	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
+		throwFmt("config must contain one JSON object")
+	}
 }
 
-func (c *Config) validate() {
-	if len(c.Listen) == 0 {
+func (a ListenAddresses) validate() {
+	if len(a) == 0 {
 		throwFmt("listen is required")
 	}
 
 	addresses := map[string]bool{}
 
-	for _, address := range c.Listen {
+	for _, address := range a {
 		if strings.TrimSpace(address) == "" {
 			throwFmt("listen address is required")
 		}
@@ -72,6 +83,10 @@ func (c *Config) validate() {
 
 		addresses[address] = true
 	}
+}
+
+func (c *FrontConfig) validate() {
+	c.Listen.validate()
 
 	if len(c.Peers) == 0 {
 		throwFmt("at least one peer is required")
@@ -112,6 +127,10 @@ func (c *Config) validate() {
 		ids[peer.ID] = true
 		endpoints[peer.Endpoint] = true
 	}
+}
+
+func (c *BackConfig) validate() {
+	c.Listen.validate()
 
 	if len(c.Buckets) == 0 {
 		throwFmt("at least one bucket is required")

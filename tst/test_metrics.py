@@ -41,8 +41,9 @@ def metric(values, name, **labels):
     return values[name, tuple(sorted(labels.items()))]
 
 
-def scrape(lab, port=None):
-    connection = http.client.HTTPConnection("127.0.0.1", lab.ports[0] if port is None else port, timeout=5)
+def scrape(lab, port=None, front=False):
+    ports = lab.front_ports if front else lab.ports
+    connection = http.client.HTTPConnection("127.0.0.1", ports[0] if port is None else port, timeout=5)
     connection.request("GET", "/metrics")
     response = connection.getresponse()
     assert response.status == 200
@@ -55,12 +56,16 @@ def scrape(lab, port=None):
 def scenario():
     lab = Lab(env={"KV_CHAOS": "", "KV_CHAOS_SEED": ""})
     alias = free_port()
+    front_alias = free_port()
     unusual = 'quoted"\\bucket\nname'
-    config = json.loads(lab.configs[0].read_text())
+    config = json.loads(lab.back_configs[0].read_text())
     config["listen"] = [f"127.0.0.1:{lab.ports[0]}", f"127.0.0.1:{alias}"]
-    config["peers"] = lab.peers[:1]
     config["buckets"][unusual] = 100
-    lab.configs[0].write_text(json.dumps(config))
+    lab.back_configs[0].write_text(json.dumps(config))
+    lab.front_configs[0].write_text(json.dumps({
+        "listen": [f"127.0.0.1:{lab.front_ports[0]}", f"127.0.0.1:{front_alias}"],
+        "peers": lab.peers[:1],
+    }))
 
     try:
         lab.start(0)
@@ -69,6 +74,7 @@ def scenario():
         assert metric(before, "kv_bucket_hits_total", bucket="small") == 0
         assert metric(before, "kv_bucket_capacity_bytes", bucket=unusual) == 100
         assert before == scrape(lab, alias)
+        assert scrape(lab, front=True) == {}
 
         assert lab.put(0, "small", "a", b"111", internal=True)[0] == 204
         assert lab.put(0, "small", "b", b"222", internal=True)[0] == 204
@@ -85,9 +91,12 @@ def scenario():
             assert lab.get(0, f"unknown-{index}", "private-key", internal=True)[0] == 404
 
         assert lab.put(0, "default", "routed", b"value")[0] == 204
-        assert lab.request(0, "GET", "/v1/default/get?key=routed", port=alias) == (200, b"value")
+        assert lab.request(0, "GET", "/v1/default/get?key=routed", port=front_alias) == (200, b"value")
         after = scrape(lab)
+        front_after = scrape(lab, front=True)
         assert after == scrape(lab, alias)
+        assert front_after == scrape(lab, front_alias)
+        assert not any(name.startswith("kv_bucket_") for name, _ in front_after)
         expected = {
             "capacity_bytes": 8, "bytes": 7, "items": 1, "hits_total": 2,
             "misses_total": 2, "puts_total": 4, "evictions_total": 2,
@@ -99,8 +108,8 @@ def scenario():
 
         assert metric(after, "kv_http_requests_total", scope="internal", operation="put", code="413") == 1
         assert metric(after, "kv_http_requests_total", scope="internal", operation="get", code="400") == 1
-        assert metric(after, "kv_http_requests_total", scope="external", operation="put", code="204") == 1
-        assert metric(after, "kv_http_requests_total", scope="external", operation="get", code="200") == 1
+        assert metric(front_after, "kv_http_requests_total", scope="external", operation="put", code="204") == 1
+        assert metric(front_after, "kv_http_requests_total", scope="external", operation="get", code="200") == 1
         assert "private-key" not in repr(after)
         assert "unknown-" not in repr(after)
 
@@ -124,6 +133,7 @@ def scenario():
             for index in range(50):
                 if worker == 0:
                     scrape(lab, alias)
+                    scrape(lab, front_alias)
                 else:
                     assert lab.put(0, "default", f"worker-{worker}", b"value", internal=True)[0] == 204
                     assert lab.get(0, "default", f"worker-{worker}", internal=True)[0] == 200
@@ -131,11 +141,11 @@ def scenario():
         with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
             list(executor.map(hammer, range(4)))
 
-        process = lab.processes[0]
+        processes = [lab.back_processes[0], lab.front_processes[0]]
         lab.stop(0)
-        assert process.returncode == 0
+        assert all(process.returncode == 0 for process in processes)
 
-        for port in (lab.ports[0], alias):
+        for port in (lab.ports[0], alias, lab.front_ports[0], front_alias):
             with socket.socket() as connection:
                 assert connection.connect_ex(("127.0.0.1", port)) != 0
     finally:
@@ -150,9 +160,9 @@ def close_failure():
 
     try:
         lab.start(0)
-        process = lab.processes[0]
+        processes = [lab.back_processes[0], lab.front_processes[0]]
         lab.stop(0)
-        assert process.returncode == 1
+        assert all(process.returncode == 1 for process in processes)
     finally:
         lab.close()
 

@@ -7,37 +7,29 @@ import (
 	"net/http"
 )
 
-type Node struct {
-	store   *Store
-	peers   []PeerConfig
-	client  *http.Client
+type Server struct {
 	log     *slog.Logger
 	metrics *Metrics
 }
 
-func newNode(cfg *Config, log *slog.Logger) *Node {
-	return &Node{
-		store:   newStore(cfg.Buckets),
-		peers:   cfg.Peers,
-		client:  newHTTPClient(),
+func newServer(log *slog.Logger) *Server {
+	return &Server{
 		log:     log,
 		metrics: newMetrics(),
 	}
 }
 
-func (n *Node) handler() http.Handler {
+func (s *Server) mux(store *Store) *http.ServeMux {
 	mux := http.NewServeMux()
 
-	mux.HandleFunc("GET /v1/{bucket}/get", n.metrics.track("external", "get", n.guard(n.externalGet)))
-	mux.HandleFunc("PUT /v1/{bucket}/put", n.metrics.track("external", "put", n.guard(n.externalPut)))
-	mux.HandleFunc("GET /{bucket}/get", n.metrics.track("internal", "get", n.guard(n.internalGet)))
-	mux.HandleFunc("PUT /{bucket}/put", n.metrics.track("internal", "put", n.guard(n.internalPut)))
-	mux.HandleFunc("GET /metrics", n.guard(n.serveMetrics))
+	mux.HandleFunc("GET /metrics", s.guard(func(w http.ResponseWriter, request *http.Request) {
+		s.metrics.serve(w, store)
+	}))
 
 	return mux
 }
 
-func (n *Node) guard(cb http.HandlerFunc) http.HandlerFunc {
+func (s *Server) guard(cb http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, request *http.Request) {
 		try(func() {
 			cb(w, request)
@@ -50,7 +42,7 @@ func (n *Node) guard(cb http.HandlerFunc) http.HandlerFunc {
 				return
 			}
 
-			n.log.Error("request failed", "err", err)
+			s.log.Error("request failed", "err", err)
 			newHTTPException(http.StatusInternalServerError, "").write(w)
 		})
 	}
@@ -64,57 +56,6 @@ func requestKey(request *http.Request) string {
 	}
 
 	return values[0]
-}
-
-func (n *Node) externalGet(w http.ResponseWriter, request *http.Request) {
-	key := requestKey(request)
-	bucket := request.PathValue("bucket")
-	status, body := forward(n.client, request.Context(), n.peers, http.MethodGet, bucket, "get", key, nil)
-
-	writeResult(w, status, body)
-}
-
-func (n *Node) externalPut(w http.ResponseWriter, request *http.Request) {
-	key := requestKey(request)
-	value := readRequest(request)
-	bucket := request.PathValue("bucket")
-	status, body := forward(n.client, request.Context(), n.peers, http.MethodPut, bucket, "put", key, value)
-
-	writeResult(w, status, body)
-}
-
-func (n *Node) internalGet(w http.ResponseWriter, request *http.Request) {
-	key := requestKey(request)
-	bucket := n.store.bucket(request.PathValue("bucket"))
-
-	if bucket == nil {
-		throwHTTP(http.StatusNotFound, "")
-	}
-
-	value, found := bucket.get(key)
-
-	if !found {
-		throwHTTP(http.StatusNotFound, "")
-	}
-
-	writeResult(w, http.StatusOK, value)
-}
-
-func (n *Node) internalPut(w http.ResponseWriter, request *http.Request) {
-	key := requestKey(request)
-	bucket := n.store.bucket(request.PathValue("bucket"))
-
-	if bucket == nil {
-		throwHTTP(http.StatusNotFound, "")
-	}
-
-	value := readRequest(request)
-
-	if !bucket.put(key, value) {
-		throwHTTP(http.StatusRequestEntityTooLarge, "")
-	}
-
-	writeHeader(w, http.StatusNoContent)
 }
 
 func writeResult(w http.ResponseWriter, status int, body []byte) {

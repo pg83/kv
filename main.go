@@ -31,17 +31,29 @@ func run(args []string, log *slog.Logger) (code int) {
 
 	try(func() {
 		switch args[1] {
-		case "run":
+		case "front", "back":
 			armChaos()
 
-			fs := flag.NewFlagSet("run", flag.ContinueOnError)
+			fs := flag.NewFlagSet(args[1], flag.ContinueOnError)
 			config := fs.String("c", "", "config file")
 
 			throw(chaosCall("parse flags", func() error {
 				return fs.Parse(args[2:])
 			}))
 
-			runNode(loadConfig(*config), log)
+			if args[1] == "back" {
+				cfg := &BackConfig{}
+
+				loadConfig(*config, cfg)
+				cfg.validate()
+				runServer(cfg.Listen, newBack(cfg, log).handler(), log)
+			} else {
+				cfg := &FrontConfig{}
+
+				loadConfig(*config, cfg)
+				cfg.validate()
+				runServer(cfg.Listen, newFront(cfg, log).handler(), log)
+			}
 		default:
 			printUsage()
 			code = 1
@@ -54,12 +66,11 @@ func run(args []string, log *slog.Logger) (code int) {
 	return code
 }
 
-func runNode(cfg *Config, log *slog.Logger) {
-	node := newNode(cfg, log)
-	server := &http.Server{Handler: node.handler()}
-	listeners := make([]net.Listener, 0, len(cfg.Listen))
+func runServer(addresses ListenAddresses, handler http.Handler, log *slog.Logger) {
+	server := &http.Server{Handler: handler}
+	listeners := make([]net.Listener, 0, len(addresses))
 
-	for _, address := range cfg.Listen {
+	for _, address := range addresses {
 		listener := throw2(chaosCall2("listen", func() (net.Listener, error) {
 			return net.Listen("tcp", address)
 		}))
@@ -128,6 +139,6 @@ func runNode(cfg *Config, log *slog.Logger) {
 
 func printUsage() {
 	throw2(chaosCall2("write stderr", func() (int, error) {
-		return os.Stderr.WriteString("Usage: kv run -c config.json\n")
+		return os.Stderr.WriteString("Usage: kv back -c back.json | kv front -c front.json\n")
 	}))
 }

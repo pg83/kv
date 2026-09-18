@@ -118,10 +118,10 @@ func metricLabel(value string) string {
 	return "\"" + strings.NewReplacer("\\", "\\\\", "\"", "\\\"", "\n", "\\n").Replace(value) + "\""
 }
 
-func (n *Node) serveMetrics(w http.ResponseWriter, request *http.Request) {
+func (m *Metrics) serve(w http.ResponseWriter, store *Store) {
 	var out strings.Builder
 
-	requests := n.metrics.snapshot()
+	requests := m.snapshot()
 	labels := make([]string, 0, len(requests))
 
 	for label := range requests {
@@ -149,7 +149,20 @@ func (n *Node) serveMetrics(w http.ResponseWriter, request *http.Request) {
 		fmt.Fprintf(&out, "kv_http_request_duration_seconds_count{%s} %d\n", label, metric.count)
 	}
 
-	buckets := n.store.metrics()
+	if store != nil {
+		store.writeMetrics(&out)
+	}
+
+	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+	writeHeader(w, http.StatusOK)
+
+	_, _ = chaosCall2("write response", func() (int, error) {
+		return w.Write([]byte(out.String()))
+	})
+}
+
+func (s *Store) writeMetrics(out *strings.Builder) {
+	buckets := s.metrics()
 
 	families := [][3]string{
 		{"kv_bucket_capacity_bytes", "gauge", "Configured local bucket capacity in key and value bytes."},
@@ -163,17 +176,10 @@ func (n *Node) serveMetrics(w http.ResponseWriter, request *http.Request) {
 	}
 
 	for i, family := range families {
-		metricHeader(&out, family[0], family[1], family[2])
+		metricHeader(out, family[0], family[1], family[2])
 
 		for _, bucket := range buckets {
-			fmt.Fprintf(&out, "%s{bucket=%s} %g\n", family[0], metricLabel(bucket.name), bucket.values[i])
+			fmt.Fprintf(out, "%s{bucket=%s} %g\n", family[0], metricLabel(bucket.name), bucket.values[i])
 		}
 	}
-
-	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
-	writeHeader(w, http.StatusOK)
-
-	_, _ = chaosCall2("write response", func() (int, error) {
-		return w.Write([]byte(out.String()))
-	})
 }
