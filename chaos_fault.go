@@ -17,6 +17,7 @@ var chaosFaults = map[string]error{
 	"close server":   syscall.EIO,
 	"decode config":  syscall.EINVAL,
 	"http call":      syscall.ECONNREFUSED,
+	"listen":         syscall.EADDRINUSE,
 	"new request":    syscall.EINVAL,
 	"notify signals": syscall.EIO,
 	"parse endpoint": syscall.EINVAL,

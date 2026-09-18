@@ -4,6 +4,7 @@ import (
 	"errors"
 	"flag"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -14,6 +15,7 @@ func main() {
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
 
 	slog.SetDefault(log)
+
 	code := run(os.Args, log)
 
 	flushCoverage()
@@ -54,7 +56,19 @@ func run(args []string, log *slog.Logger) (code int) {
 
 func runNode(cfg *Config, log *slog.Logger) {
 	node := newNode(cfg, log)
-	server := &http.Server{Addr: cfg.Listen, Handler: node.handler()}
+	server := &http.Server{Handler: node.handler()}
+	listeners := make([]net.Listener, 0, len(cfg.Listen))
+
+	for _, address := range cfg.Listen {
+		listener := throw2(chaosCall2("listen", func() (net.Listener, error) {
+			return net.Listen("tcp", address)
+		}))
+
+		defer listener.Close()
+
+		listeners = append(listeners, listener)
+	}
+
 	signals := make(chan os.Signal, 1)
 
 	throw(chaosCall("notify signals", func() error {
@@ -71,22 +85,45 @@ func runNode(cfg *Config, log *slog.Logger) {
 		})
 	}()
 
-	go func() {
-		<-signals
-		throw(chaosCall("close server", server.Close))
-	}()
+	results := make(chan error, len(listeners))
 
-	log.Info("listening", "addr", cfg.Listen)
+	for _, listener := range listeners {
+		log.Info("listening", "addr", listener.Addr())
 
-	err := chaosCall("serve", func() error {
-		return server.ListenAndServe()
-	})
-
-	if errors.Is(err, http.ErrServerClosed) {
-		return
+		go func() {
+			try(func() {
+				throw(chaosCall("serve", func() error {
+					return server.Serve(listener)
+				}))
+			}).catch(func(err *Exception) {
+				results <- err.asError()
+			})
+		}()
 	}
 
-	throw(err)
+	remaining := len(listeners)
+
+	var err error
+
+	select {
+	case <-signals:
+	case err = <-results:
+		remaining--
+	}
+
+	closeErr := chaosCall("close server", server.Close)
+
+	_ = server.Close()
+
+	for range remaining {
+		serveErr := <-results
+
+		if !errors.Is(serveErr, http.ErrServerClosed) {
+			err = serveErr
+		}
+	}
+
+	throw(errors.Join(err, closeErr))
 }
 
 func printUsage() {

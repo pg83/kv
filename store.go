@@ -17,6 +17,11 @@ type Bucket struct {
 	size     int64
 	items    map[string]*list.Element
 	lru      *list.List
+	hits     uint64
+	misses   uint64
+	puts     uint64
+	evicted  uint64
+	rejected uint64
 }
 
 type Store struct {
@@ -49,9 +54,12 @@ func (b *Bucket) get(key string) ([]byte, bool) {
 	element, found := b.items[key]
 
 	if !found {
+		b.misses++
+
 		return nil, false
 	}
 
+	b.hits++
 	b.lru.MoveToFront(element)
 
 	return element.Value.(*Entry).value, true
@@ -60,13 +68,17 @@ func (b *Bucket) get(key string) ([]byte, bool) {
 func (b *Bucket) put(key string, value []byte) bool {
 	size := int64(len(key)) + int64(len(value))
 
-	if size > b.capacity {
-		return false
-	}
-
 	b.mu.Lock()
 
 	defer b.mu.Unlock()
+
+	if size > b.capacity {
+		b.rejected++
+
+		return false
+	}
+
+	b.puts++
 
 	if element, found := b.items[key]; found {
 		entry := element.Value.(*Entry)
@@ -97,4 +109,5 @@ func (b *Bucket) remove(element *list.Element) {
 	delete(b.items, entry.key)
 	b.lru.Remove(element)
 	b.size -= entry.size
+	b.evicted++
 }

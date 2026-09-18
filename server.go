@@ -8,28 +8,31 @@ import (
 )
 
 type Node struct {
-	store  *Store
-	peers  []PeerConfig
-	client *http.Client
-	log    *slog.Logger
+	store   *Store
+	peers   []PeerConfig
+	client  *http.Client
+	log     *slog.Logger
+	metrics *Metrics
 }
 
 func newNode(cfg *Config, log *slog.Logger) *Node {
 	return &Node{
-		store:  newStore(cfg.Buckets),
-		peers:  cfg.Peers,
-		client: newHTTPClient(),
-		log:    log,
+		store:   newStore(cfg.Buckets),
+		peers:   cfg.Peers,
+		client:  newHTTPClient(),
+		log:     log,
+		metrics: newMetrics(),
 	}
 }
 
 func (n *Node) handler() http.Handler {
 	mux := http.NewServeMux()
 
-	mux.HandleFunc("GET /v1/{bucket}/get", n.guard(n.externalGet))
-	mux.HandleFunc("PUT /v1/{bucket}/put", n.guard(n.externalPut))
-	mux.HandleFunc("GET /{bucket}/get", n.guard(n.internalGet))
-	mux.HandleFunc("PUT /{bucket}/put", n.guard(n.internalPut))
+	mux.HandleFunc("GET /v1/{bucket}/get", n.metrics.track("external", "get", n.guard(n.externalGet)))
+	mux.HandleFunc("PUT /v1/{bucket}/put", n.metrics.track("external", "put", n.guard(n.externalPut)))
+	mux.HandleFunc("GET /{bucket}/get", n.metrics.track("internal", "get", n.guard(n.internalGet)))
+	mux.HandleFunc("PUT /{bucket}/put", n.metrics.track("internal", "put", n.guard(n.internalPut)))
+	mux.HandleFunc("GET /metrics", n.guard(n.serveMetrics))
 
 	return mux
 }

@@ -13,9 +13,29 @@ type PeerConfig struct {
 }
 
 type Config struct {
-	Listen  string           `json:"listen"`
+	Listen  ListenAddresses  `json:"listen"`
 	Peers   []PeerConfig     `json:"peers"`
 	Buckets map[string]int64 `json:"buckets"`
+}
+
+type ListenAddresses []string
+
+func (a *ListenAddresses) UnmarshalJSON(data []byte) error {
+	return a.unmarshalJSON(data)
+}
+
+func (a *ListenAddresses) unmarshalJSON(data []byte) error {
+	if data[0] == '"' {
+		var address string
+
+		err := json.Unmarshal(data, &address)
+
+		*a = ListenAddresses{address}
+
+		return err
+	}
+
+	return json.Unmarshal(data, (*[]string)(a))
 }
 
 func loadConfig(path string) *Config {
@@ -35,8 +55,22 @@ func loadConfig(path string) *Config {
 }
 
 func (c *Config) validate() {
-	if c.Listen == "" {
+	if len(c.Listen) == 0 {
 		throwFmt("listen is required")
+	}
+
+	addresses := map[string]bool{}
+
+	for _, address := range c.Listen {
+		if strings.TrimSpace(address) == "" {
+			throwFmt("listen address is required")
+		}
+
+		if addresses[address] {
+			throwFmt("duplicate listen address %q", address)
+		}
+
+		addresses[address] = true
 	}
 
 	if len(c.Peers) == 0 {

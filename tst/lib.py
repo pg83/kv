@@ -134,8 +134,8 @@ class Lab:
 
         return False
 
-    def request(self, index, method, path, body=None):
-        connection = http.client.HTTPConnection("127.0.0.1", self.ports[index], timeout=5)
+    def request(self, index, method, path, body=None, *, port=None):
+        connection = http.client.HTTPConnection("127.0.0.1", self.ports[index] if port is None else port, timeout=5)
         connection.request(method, path, body=body)
         response = connection.getresponse()
         data = response.read()

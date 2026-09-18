@@ -4,7 +4,7 @@ import json
 import os
 import socket
 
-from lib import Lab
+from lib import Lab, free_port
 
 
 def config(**changes):
@@ -48,6 +48,13 @@ def main():
 
         invalid = {
             "listen": config(listen=""),
+            "listen-empty-list": config(listen=[]),
+            "listen-null": config(listen=None),
+            "listen-type": config(listen=10),
+            "listen-element-type": config(listen=[10]),
+            "listen-blank": config(listen=[" "]),
+            "listen-duplicate": config(listen=["127.0.0.1:1", "127.0.0.1:1"]),
+            "listen-invalid": config(listen=["invalid address"]),
             "peers": config(peers=[]),
             "peer-id": config(peers=[{"id": "", "endpoint": "http://127.0.0.1:1"}]),
             "duplicate-id": config(peers=[
@@ -76,6 +83,15 @@ def main():
 
         try:
             fails(run_config(lab, "busy", config(listen=f"127.0.0.1:{port}"), quiet))
+            first = free_port()
+            result = run_config(lab, "partially-busy", config(listen=[
+                f"127.0.0.1:{first}", f"127.0.0.1:{port}",
+            ]), quiet)
+            fails(result)
+            assert b"msg=listening" not in result.stderr
+
+            with socket.socket() as released:
+                released.bind(("127.0.0.1", first))
         finally:
             listener.close()
 
@@ -94,6 +110,7 @@ def main():
                 {"KV_CHAOS": "parse flags:1", "KV_CHAOS_SEED": "1"},
                 {"KV_CHAOS": "notify signals:1", "KV_CHAOS_SEED": "1"},
                 {"KV_CHAOS": "serve:1", "KV_CHAOS_SEED": "1"},
+                {"KV_CHAOS": "listen:1", "KV_CHAOS_SEED": "1"},
             ]
 
             for index, env in enumerate(cases):
@@ -103,6 +120,10 @@ def main():
                     result = run_config(lab, f"chaos-{index}", config(), env)
 
                 fails(result)
+
+            fails(run_config(lab, "multi-serve-failure", config(listen=[
+                f"127.0.0.1:{free_port()}", f"127.0.0.1:{free_port()}",
+            ]), {"KV_CHAOS": "serve:1", "KV_CHAOS_SEED": "1"}))
     finally:
         lab.close()
 
